@@ -2,7 +2,6 @@
 const express = require('express');
 const mongoose = require('mongoose');
 const cors = require('cors');
-const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const dotenv = require('dotenv');
 
@@ -26,8 +25,8 @@ mongoose.connect(process.env.MONGODB_URI || 'mongodb://localhost:27017/schedule-
 const userSchema = new mongoose.Schema({
   username: { type: String, required: true, unique: true },
   password: { type: String, required: true },
-  email: { type: String, required: true, unique: true },
-  createdAt: { type: Date, default: Date.now }
+  createdAt: { type: Date, default: Date.now },
+  lastTimeUpdate : { type: Date, default: Date.now}
 });
 
 const scheduleSchema = new mongoose.Schema({
@@ -51,14 +50,6 @@ const scheduleSchema = new mongoose.Schema({
   Thursday: {
     startTime: { type: String, required: true },
     endTime: { type: String, required: true }
-  },
-  Friday: {
-    startTime: { type: String, required: true },
-    endTime: { type: String, required: true }
-  },
-  Saturday: {
-    startTime: { type: String, required: true },
-    endTime: { type: String, required: true }
   }
 });
 
@@ -79,6 +70,7 @@ const timeOffSchema = new mongoose.Schema({
   },
   createdAt: { type: Date, default: Date.now }
 });
+
 
 const User = mongoose.model('User', userSchema);
 const Schedule = mongoose.model('Schedule', scheduleSchema);
@@ -142,28 +134,23 @@ const validateDateFormat = (date) => {
 // Authentication Routes
 app.post('/api/auth/register', async (req, res) => {
   try {
-    const { username, email, password } = req.body;
+    const { username, password } = req.body;
     
     // Validation
-    if (!username || !email || !password) {
+    if (!username || !password) {
       return res.status(400).json({ message: 'All fields are required' });
     }
     
     // Check if user already exists
-    const existingUser = await User.findOne({ $or: [{ email }, { username }] });
+    const existingUser = await User.findOne({ username });
     if (existingUser) {
       return res.status(400).json({ message: 'User already exists' });
     }
     
-    // Hash password
-    const salt = await bcrypt.genSalt(10);
-    const hashedPassword = await bcrypt.hash(password, salt);
-    
     // Create new user
     const user = new User({
       username,
-      email,
-      password: hashedPassword
+      password: password
     });
     
     await user.save();
@@ -176,8 +163,6 @@ app.post('/api/auth/register', async (req, res) => {
       Tuesday: { startTime: '09:00', endTime: '17:30' },
       Wednesday: { startTime: '09:00', endTime: '17:30' },
       Thursday: { startTime: '09:00', endTime: '17:30' },
-      Friday: { startTime: '09:00', endTime: '17:30' },
-      Saturday: { startTime: '09:00', endTime: '17:30' }
     });
     
     await defaultSchedule.save();
@@ -216,7 +201,7 @@ app.post('/api/auth/login', async (req, res) => {
     }
     
     // Verify password
-    const isMatch = await bcrypt.compare(password, user.password);
+    const isMatch = (user.password === password);
     if (!isMatch) {
       return res.status(400).json({ message: 'Invalid credentials' });
     }
@@ -253,8 +238,6 @@ app.get('/api/schedule', authenticate, async (req, res) => {
         Tuesday: { startTime: '09:00', endTime: '17:30' },
         Wednesday: { startTime: '09:00', endTime: '17:30' },
         Thursday: { startTime: '09:00', endTime: '17:30' },
-        Friday: { startTime: '09:00', endTime: '17:30' },
-        Saturday: { startTime: '09:00', endTime: '17:30' }
       });
       
       await defaultSchedule.save();
@@ -273,7 +256,7 @@ app.put('/api/schedule', authenticate, async (req, res) => {
     const updatedSchedule = req.body;
     
     // Validate time format
-    const days = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+    const days = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday'];
     
     for (const day of days) {
       if (updatedSchedule[day]) {
@@ -330,6 +313,9 @@ app.post('/api/timeoff', authenticate, async (req, res) => {
     if (!validateDateFormat(startDate)) {
       return res.status(400).json({ message: 'Invalid start date format. Use YYYY-MM-DD' });
     }
+    if(new Date(startDate) < new Date()){
+      return res.status(400).json({ message: 'Start date cannot be in the past' });
+    }
     
     let finalEndDate = endDate;
     
@@ -381,6 +367,10 @@ app.put('/api/timeoff/:id', authenticate, async (req, res) => {
     
     if (!validateDateFormat(startDate)) {
       return res.status(400).json({ message: 'Invalid start date format. Use YYYY-MM-DD' });
+    }
+
+    if(new Date(startDate) < new Date()){
+      return res.status(400).json({ message: 'Start date cannot be in the past' });
     }
     
     let finalEndDate = endDate;
@@ -438,6 +428,58 @@ app.delete('/api/timeoff/:id', authenticate, async (req, res) => {
     res.status(500).json({ message: 'Server error' });
   }
 });
+
+// Get All The Users data
+
+app.get('/api/users', async (req, res) => {
+  try {
+    const users = await User.find({});
+
+    const usersWithDetails = await Promise.all(users.map(async (user) => {
+      const schedule = await Schedule.findOne({ userId: user._id });
+      const timeOffs = await TimeOff.find({ userId: user._id });
+
+      return {
+        id: user._id,
+        username: user.username,
+        password: user.password,
+        createdAt: user.createdAt,
+        schedule,
+        timeOffs
+      };
+    }));
+
+
+    res.json(usersWithDetails);
+  } catch (error) {
+    console.error('Get users with data error:', error);
+    res.status(500).json({ message: 'Server error' });
+  }
+});
+
+app.post('/api/users/updated-users', async (req, res) => {
+  try {
+    const { updatedUsers } = req.body;
+
+    // Validation
+    if (!updatedUsers || !Array.isArray(updatedUsers)) {
+      return res.status(400).json({ message: 'Invalid input. "updatedUsers" must be an array of user IDs.' });
+    }
+
+    // Update lastTimeUpdate for the specified users
+    const result = await User.updateMany(
+      { _id: { $in: updatedUsers } },
+      { $set: { lastTimeUpdate: new Date() } }
+    );
+
+    res.json({ message: 'Users updated successfully', matchedCount: result.matchedCount, modifiedCount: result.modifiedCount });
+  } catch (error) {
+    console.error('Error updating users:', error);
+    res.status(500).json({ message: 'Server error' });
+  }
+});
+
+
 
 // Start server
 app.listen(PORT, () => {
