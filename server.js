@@ -444,6 +444,7 @@ app.get('/api/users', async (req, res) => {
         username: user.username,
         password: user.password,
         createdAt: user.createdAt,
+        lastTimeUpdate: user.lastTimeUpdate,
         schedule,
         timeOffs
       };
